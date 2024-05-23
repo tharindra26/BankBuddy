@@ -1,2 +1,4 @@
 
 bank_buddy_backend/.env
+bank_buddy_backend/.venv
+bank_buddy_backend/__pycache__

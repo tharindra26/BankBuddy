@@ -1,10 +1,10 @@
 import os
-from fastapi import FastAPI, UploadFile, File
-from utils import get_pdf_text, get_text_chunks, initialize_pinecone, append_pinecone_vectorstore, get_pinecone_vectorstore, handle_userinput
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
-from fastapi import FastAPI, File, UploadFile, HTTPException
 from typing import List
 from fastapi.middleware.cors import CORSMiddleware
+from pinecone_manager import pinecone_manager
+from utils import get_pdf_text, get_text_chunks, handle_userinput
 
 app = FastAPI()
 
@@ -22,29 +22,27 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 class Question(BaseModel):
     user_question: str
-    
-pinecone_index = '' 
-vectorDatabase = ''
+
+@app.on_event("startup")
+async def startup_event():
+    pinecone_manager.initialize_pinecone()
+    pinecone_manager.get_pinecone_vectorstore()
 
 @app.get("/")
-def init():
-    global pinecone_index
-    global vectorDatabase  
-    pinecone_index = initialize_pinecone()
-    vectorDatabase = get_pinecone_vectorstore(pinecone_index)
-    return {"message": pinecone_index}
+def read_root():
+    return {"message": "Server is running"}
 
 @app.post("/chat/")
 async def get_userinput(question: Question):
     print(question.user_question)
-    answer = handle_userinput(question.user_question)
-    print(answer)
-    return {"answer": answer}
+    user_question = question.user_question
+    answer = handle_userinput(user_question)
+    return {"user_question": user_question, "answer": answer}
 
 @app.post("/upload/")
 async def upload_files(files: List[UploadFile] = File(...)):
+    uploaded_files = []
     try:
-        uploaded_files = []
         for file in files:
             if not file.filename.lower().endswith('.pdf'):
                 raise HTTPException(status_code=400, detail="Only PDF files are allowed.")
@@ -57,7 +55,7 @@ async def upload_files(files: List[UploadFile] = File(...)):
         
         text = get_pdf_text(uploaded_files)
         text_chunks = get_text_chunks(text)
-        append_pinecone_vectorstore(text_chunks, pinecone_index)
+        pinecone_manager.append_pinecone_vectorstore(text_chunks)
 
         return {"uploaded_files": uploaded_files, "text": text}
     
@@ -65,3 +63,7 @@ async def upload_files(files: List[UploadFile] = File(...)):
         for file_path in uploaded_files:
             if os.path.exists(file_path):
                 os.remove(file_path)
+
+
+
+
