@@ -1,22 +1,22 @@
 from langchain_core.prompts.chat import ChatPromptTemplate
 from langchain_anthropic import ChatAnthropic
 from langchain.llms import Ollama
+from langchain_groq import ChatGroq
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.memory import ConversationBufferMemory
-from langchain.chains import ConversationalRetrievalChain
 from pinecone_manager import pinecone_manager
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_history_aware_retriever
+from langchain.chains import create_retrieval_chain
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.prompts import MessagesPlaceholder
 from langchain.prompts import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
+    ChatPromptTemplate
 )
 
 load_dotenv()
-
-memory = ConversationBufferMemory(
-        memory_key='chat_history', return_messages=True)
 
 chat_history = []
 
@@ -39,52 +39,47 @@ def get_text_chunks(text):
     return chunks
     
 def get_conversation_chain(vectorstore):
-    # llm = Ollama(model="llama3")
-    llm = ChatAnthropic(model='claude-3-opus-20240229')
-
-    system_template = """ 
-    You are a helpful banking assistant for the Commercial Bank Of Ceylon PLC. Your goal is to assist users by providing accurate information based on the given data stored in Pinecone. If the user asks for PDFs, provide the corresponding links. If you don't know the answer, inform the user to contact or visit the nearest branch. Do not include the prompt itself in your responses. If the user is asking the question in sinhala languwage but using english letters, give the answer in sinhala letters.
-    ----
-    {context}
-    ----
-    """
-    user_template = "Question:{question}"
-    messages = [
-        SystemMessagePromptTemplate.from_template(system_template),
-        HumanMessagePromptTemplate.from_template(user_template)
-    ]
-    qa_prompt = ChatPromptTemplate.from_messages(messages)
-
+    # # llm = Ollama(model="llama3")
+    llm = ChatGroq(temperature=0, model_name="llama3-70b-8192")
+    # llm = ChatAnthropic(model='claude-3-opus-20240229')
     
+    retriever = vectorstore.as_retriever(search_type="mmr")
     
-    retriever=vectorstore.as_retriever()
+    memory = ConversationBufferMemory(
+        memory_key='chat_history', return_messages=True)
 
-    conversation_chain = ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        retriever=retriever,
-        memory=memory,
-        combine_docs_chain_kwargs={"prompt": qa_prompt}
-    )
+    prompt_with_history = ChatPromptTemplate.from_messages([
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("user", "{input}"),
+        ("user", "Given the above conversation, generate a search query to look up to get information relevant to the conversation")
+    ])
+    retriever_chain = create_history_aware_retriever(llm, retriever, prompt_with_history)
 
-    return conversation_chain
+    prompt_with_context = ChatPromptTemplate.from_messages([
+        ("system", """
+        
+        You are a Commercial bank assistant who guide users on how to create accounts.
 
-def handle_userinput(user_question):
-    global chat_history 
+        Context: {context}
+        
+        """
+        
+        ),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("user", "{input}"),
+    ])
+    document_chain = create_stuff_documents_chain(llm, prompt_with_context)
 
-    conversation_chain = get_conversation_chain(pinecone_manager.vectorDatabase)
-    
-    response = conversation_chain({"question": user_question})
-    print(response)
+    retrieval_chain = create_retrieval_chain(retriever_chain, document_chain)
 
-    new_chat_history = response.get('chat_history', [])
+    return retrieval_chain
 
-    chat_history.extend(new_chat_history)
-
-    ai_message_content = None
-    for message in reversed(new_chat_history):
-        if message.type == "ai":
-            ai_message_content = message.content
-            break
-
-
-    return ai_message_content
+def handle_userinput(question):
+    retrieval_chain = get_conversation_chain(pinecone_manager.vectorDatabase)
+    chat_history.append(HumanMessage(content=question))
+    response = retrieval_chain.invoke({
+        "chat_history": chat_history,
+        "input": question
+    })
+    chat_history.append(AIMessage(content=response["answer"]))
+    return response["answer"]
