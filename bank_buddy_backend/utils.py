@@ -85,7 +85,7 @@
 #     return response["answer"]
 
 
-
+import os
 from langchain_core.prompts.chat import ChatPromptTemplate
 from langchain_anthropic import ChatAnthropic
 from langchain_community.llms import Ollama
@@ -106,6 +106,8 @@ from langchain.prompts import (
 from langchain.docstore.document import Document
 
 load_dotenv()
+
+groq_api_key = os.getenv("GROQ_API_KEY")
 
 chat_history = []
 
@@ -130,7 +132,8 @@ def get_text_chunks(text):
     
 def get_conversation_chain(vectorstore):
     # # llm = Ollama(model="llama3")
-    llm = ChatGroq(temperature=0, model_name="llama3-70b-8192")
+    llm = ChatGroq(temperature=0, model_name="llama3-70b-8192", api_key=groq_api_key)
+
     # llm = ChatAnthropic(model='claude-3-opus-20240229')
     
     retriever = vectorstore.as_retriever(search_type="mmr")
